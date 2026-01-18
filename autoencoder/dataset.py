@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 class Autoencoder_dataset(Dataset):
     def __init__(self, data_dir):
-        data_names = glob.glob(os.path.join(data_dir, '*f.npy'))
+        data_names = glob.glob(os.path.join(data_dir, '*_f.npy'))
         self.data_dic = {}
         for i in range(len(data_names)):
             features = np.load(data_names[i])

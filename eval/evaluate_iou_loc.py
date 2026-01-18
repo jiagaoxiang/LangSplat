@@ -326,7 +326,7 @@ if __name__ == "__main__":
     mask_thresh = args.mask_thresh
     feat_dir = [os.path.join(args.feat_dir, dataset_name+f"_{i}", "train/ours_None/renders_npy") for i in range(1,4)]
     output_path = os.path.join(args.output_dir, dataset_name)
-    ae_ckpt_path = os.path.join(args.ae_ckpt_dir, dataset_name, "ae_ckpt/best_ckpt.pth")
+    ae_ckpt_path = os.path.join(args.ae_ckpt_dir, dataset_name, "best_ckpt.pth")
     json_folder = os.path.join(args.json_folder, dataset_name)
 
     # NOTE logger

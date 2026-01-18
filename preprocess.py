@@ -111,6 +111,7 @@ class OpenCLIPNetwork(nn.Module):
 
 
 def create(image_list, data_list, save_folder):
+    print("DEBUG create: Starting create function", flush=True)
     assert image_list is not None, "image_list must be provided to generate features"
     embed_size=512
     seg_maps = []
@@ -118,9 +119,12 @@ def create(image_list, data_list, save_folder):
     timer = 0
     img_embeds = torch.zeros((len(image_list), 300, embed_size))
     seg_maps = torch.zeros((len(image_list), 4, *image_list[0].shape[1:])) 
+    print("DEBUG create: Moving SAM model to CUDA...", flush=True)
     mask_generator.predictor.model.to('cuda')
+    print("DEBUG create: SAM model on CUDA, starting image loop", flush=True)
 
     for i, img in tqdm(enumerate(image_list), desc="Embedding images", leave=False):
+        print(f"DEBUG create: Processing image {i}", flush=True)
         timer += 1
         try:
             img_embed, seg_map = _embed_clip_sam_tiles(img.unsqueeze(0), sam_encoder)
@@ -185,6 +189,7 @@ def _embed_clip_sam_tiles(image, sam_encoder):
             clip_embed = model.encode_image(tiles)
         clip_embed /= clip_embed.norm(dim=-1, keepdim=True)
         clip_embeds[mode] = clip_embed.detach().cpu().half()
+        print(f"DEBUG: CLIP mode \'{mode}\' completed, embed shape: {clip_embed.shape}", flush=True)
     
     return clip_embeds, seg_map
 
@@ -215,45 +220,52 @@ def filter(keep: torch.Tensor, masks_result) -> None:
 def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs):
     """
     Perform mask non-maximum suppression (NMS) on a set of masks based on their scores.
-    
-    Args:
-        masks (torch.Tensor): has shape (num_masks, H, W)
-        scores (torch.Tensor): The scores of the masks, has shape (num_masks,)
-        iou_thr (float, optional): The threshold for IoU.
-        score_thr (float, optional): The threshold for the mask scores.
-        inner_thr (float, optional): The threshold for the overlap rate.
-        **kwargs: Additional keyword arguments.
-    Returns:
-        selected_idx (torch.Tensor): A tensor representing the selected indices of the masks after NMS.
+    Optimized for ROCm with vectorized operations.
     """
-
+    print(f"DEBUG mask_nms: Processing {len(masks)} masks", flush=True)
+    
     scores, idx = scores.sort(0, descending=True)
     num_masks = idx.shape[0]
     
     masks_ord = masks[idx.view(-1), :]
     masks_area = torch.sum(masks_ord, dim=(1, 2), dtype=torch.float)
 
-    iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
-    inner_iou_matrix = torch.zeros((num_masks,) * 2, dtype=torch.float, device=masks.device)
-    for i in range(num_masks):
-        for j in range(i, num_masks):
-            intersection = torch.sum(torch.logical_and(masks_ord[i], masks_ord[j]), dtype=torch.float)
-            union = torch.sum(torch.logical_or(masks_ord[i], masks_ord[j]), dtype=torch.float)
-            iou = intersection / union
-            iou_matrix[i, j] = iou
-            # select mask pairs that may have a severe internal relationship
-            if intersection / masks_area[i] < 0.5 and intersection / masks_area[j] >= 0.85:
-                inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
-                inner_iou_matrix[i, j] = inner_iou
-            if intersection / masks_area[i] >= 0.85 and intersection / masks_area[j] < 0.5:
-                inner_iou = 1 - (intersection / masks_area[j]) * (intersection / masks_area[i])
-                inner_iou_matrix[j, i] = inner_iou
-
-    iou_matrix.triu_(diagonal=1)
+    # Vectorized IoU computation - much faster
+    print("DEBUG mask_nms: Computing IoU matrix (vectorized)...", flush=True)
+    masks_flat = masks_ord.reshape(num_masks, -1).float()  # [num_masks, H*W]
+    
+    # Compute intersection: masks_flat @ masks_flat.T gives pairwise dot products
+    intersection = torch.mm(masks_flat, masks_flat.T)  # [num_masks, num_masks]
+    
+    # Compute union: area_i + area_j - intersection
+    areas_matrix = masks_area.unsqueeze(1) + masks_area.unsqueeze(0)
+    union = areas_matrix - intersection
+    
+    iou_matrix = intersection / (union + 1e-6)
+    iou_matrix = torch.triu(iou_matrix, diagonal=1)  # Only upper triangle
+    
+    print("DEBUG mask_nms: IoU matrix computed, computing inner IoU...", flush=True)
+    
+    # Compute inner IoU for severe internal relationships
+    inner_iou_matrix = torch.zeros((num_masks, num_masks), dtype=torch.float, device=masks.device)
+    
+    # intersection / area_i and intersection / area_j ratios
+    int_over_area_i = intersection / (masks_area.unsqueeze(1) + 1e-6)
+    int_over_area_j = intersection / (masks_area.unsqueeze(0) + 1e-6)
+    
+    # Condition 1: int/area_i < 0.5 and int/area_j >= 0.85
+    mask1 = (int_over_area_i < 0.5) & (int_over_area_j >= 0.85)
+    inner_iou_matrix[mask1] = 1 - (int_over_area_j[mask1] * int_over_area_i[mask1])
+    
+    # Condition 2: int/area_i >= 0.85 and int/area_j < 0.5 (transpose)
+    mask2 = (int_over_area_i >= 0.85) & (int_over_area_j < 0.5)
+    inner_iou_matrix[mask2] = 1 - (int_over_area_j[mask2] * int_over_area_i[mask2])
+    
+    print("DEBUG mask_nms: Filtering masks...", flush=True)
     iou_max, _ = iou_matrix.max(dim=0)
     inner_iou_matrix_u = torch.triu(inner_iou_matrix, diagonal=1)
     inner_iou_max_u, _ = inner_iou_matrix_u.max(dim=0)
-    inner_iou_matrix_l = torch.tril(inner_iou_matrix, diagonal=1)
+    inner_iou_matrix_l = torch.tril(inner_iou_matrix, diagonal=-1)
     inner_iou_max_l, _ = inner_iou_matrix_l.max(dim=0)
     
     keep = iou_max <= iou_thr
@@ -263,20 +275,23 @@ def mask_nms(masks, scores, iou_thr=0.7, score_thr=0.1, inner_thr=0.2, **kwargs)
     
     # If there are no masks with scores above threshold, the top 3 masks are selected
     if keep_conf.sum() == 0:
-        index = scores.topk(3).indices
-        keep_conf[index, 0] = True
+        index = scores.topk(min(3, len(scores))).indices
+        keep_conf[index] = True
     if keep_inner_u.sum() == 0:
-        index = scores.topk(3).indices
-        keep_inner_u[index, 0] = True
+        index = scores.topk(min(3, len(scores))).indices
+        keep_inner_u[index] = True
     if keep_inner_l.sum() == 0:
-        index = scores.topk(3).indices
-        keep_inner_l[index, 0] = True
+        index = scores.topk(min(3, len(scores))).indices
+        keep_inner_l[index] = True
+    
     keep *= keep_conf
     keep *= keep_inner_u
     keep *= keep_inner_l
 
     selected_idx = idx[keep]
+    print(f"DEBUG mask_nms: Filtered from {num_masks} to {len(selected_idx)} masks", flush=True)
     return selected_idx
+
 
 def masks_update(*args, **kwargs):
     # remove redundant masks based on the scores and overlap rate between masks
@@ -294,14 +309,21 @@ def masks_update(*args, **kwargs):
     return masks_new
 
 def sam_encoder(image):
+    print("DEBUG sam_encoder: Function called", flush=True)
+    print(f"DEBUG sam_encoder: Converting image, shape={image[0].shape}", flush=True)
     image = cv2.cvtColor(image[0].permute(1,2,0).numpy().astype(np.uint8), cv2.COLOR_BGR2RGB)
     # pre-compute masks
+    print("DEBUG sam_encoder: Starting mask_generator.generate()...", flush=True)
     masks_default, masks_s, masks_m, masks_l = mask_generator.generate(image)
+    print(f"DEBUG sam_encoder: mask_generator.generate() completed. Got {len(masks_default)} default, {len(masks_s)} s, {len(masks_m)} m, {len(masks_l)} l masks", flush=True)
     # pre-compute postprocess
+    print("DEBUG sam_encoder: Starting masks_update...", flush=True)
     masks_default, masks_s, masks_m, masks_l = \
         masks_update(masks_default, masks_s, masks_m, masks_l, iou_thr=0.8, score_thr=0.7, inner_thr=0.5)
+    print(f"DEBUG sam_encoder: masks_update done. Filtered to {len(masks_default)} default, {len(masks_s)} s, {len(masks_m)} m, {len(masks_l)} l masks", flush=True)
     
     def mask2segmap(masks, image):
+        print(f"DEBUG mask2segmap: Processing {len(masks)} masks", flush=True)
         seg_img_list = []
         seg_map = -np.ones(image.shape[:2], dtype=np.int32)
         for i in range(len(masks)):
@@ -314,18 +336,24 @@ def sam_encoder(image):
         seg_imgs = np.stack(seg_img_list, axis=0) # b,H,W,3
         seg_imgs = (torch.from_numpy(seg_imgs.astype("float32")).permute(0,3,1,2) / 255.0).to('cuda')
 
+        print(f"DEBUG mask2segmap: Completed, returning {seg_imgs.shape[0]} segment images", flush=True)
         return seg_imgs, seg_map
 
     seg_images, seg_maps = {}, {}
+    print("DEBUG sam_encoder: Processing default masks", flush=True)
     seg_images['default'], seg_maps['default'] = mask2segmap(masks_default, image)
     if len(masks_s) != 0:
+        print("DEBUG sam_encoder: Processing s masks", flush=True)
         seg_images['s'], seg_maps['s'] = mask2segmap(masks_s, image)
     if len(masks_m) != 0:
+        print("DEBUG sam_encoder: Processing m masks", flush=True)
         seg_images['m'], seg_maps['m'] = mask2segmap(masks_m, image)
     if len(masks_l) != 0:
+        print("DEBUG sam_encoder: Processing l masks", flush=True)
         seg_images['l'], seg_maps['l'] = mask2segmap(masks_l, image)
     
     # 0:default 1:s 2:m 3:l
+    print("DEBUG sam_encoder: Returning from sam_encoder", flush=True)
     return seg_images, seg_maps
 
 def seed_everything(seed_value):
@@ -362,10 +390,10 @@ if __name__ == '__main__':
     sam = sam_model_registry["vit_h"](checkpoint=sam_ckpt_path).to('cuda')
     mask_generator = SamAutomaticMaskGenerator(
         model=sam,
-        points_per_side=32,
-        pred_iou_thresh=0.7,
+        points_per_side=16,  # Reduced from 32 to generate fewer masks
+        pred_iou_thresh=0.85,  # Increased from 0.7
         box_nms_thresh=0.7,
-        stability_score_thresh=0.85,
+        stability_score_thresh=0.90,  # Increased from 0.85
         crop_n_layers=1,
         crop_n_points_downscale_factor=1,
         min_mask_region_area=100,
