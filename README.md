@@ -1,3 +1,89 @@
+## This is the AMD ROCm GPU tested version of the original repo. 
+
+To install ROCm and PyTorch suite of software, please refer: [The Rock releases for rocm and PyTorch](https://github.com/ROCm/TheRock/blob/main/RELEASES.md). To install the AMD ROCm GPU version of the submodules and dependencies for this repo, use the commands below:
+
+```shell
+pip install open-clip-torch plyfile jaxtyping typing pathlib
+pip install submodules/segment-anything-langsplat --no-build-isolation
+pip install --no-build-isolation git+https://github.com/jiagaoxiang/langsplat-rasterization.git 
+pip install --no-build-isolation git+https://github.com/amd-wangfan/simple-knn.git@hip_support
+pip install opencv-python
+```
+
+Below are the commands for running the entire commands in the repo tested on AMD GPUs.
+
+```shell
+# Clone LangSplat repo
+git clone https://github.com/jiagaoxiang/LangSplat.git --recursive
+cd LangSplat/
+
+# Download the LERF_OVS dataset
+pip install gdown
+gdown --id 1QF1Po5p5DwTjFHu6tnTeYs_G0egMVmHt --no-check-certificate
+# Unzip the downloaded dataset
+apt-get update
+apt-get install unzip
+unzip -q lerf_ovs.zip
+
+# Download SAM model checkpoints
+mkdir -p ckpts && cd ckpts && wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+
+# Preprocess the dataset
+dataset_path=lerf_ovs/figurines
+python preprocess.py --dataset_path $dataset_path
+
+# Train the autoencoder
+cd autoencoder
+python train.py \
+  --dataset_path $dataset_path \
+  --dataset_name figurines \
+  --encoder_dims 256 128 64 32 3 \
+  --decoder_dims 16 32 64 128 256 256 512 \
+  --lr 0.0007 \
+  --num_epochs 100
+
+# Get the 3-dims language feature of the scene
+python test.py \
+  --dataset_path $dataset_path \
+  --dataset_name figurines \
+  --encoder_dims 256 128 64 32 3 \
+  --decoder_dims 16 32 64 128 256 256 512
+
+# Train RGB 3DGS 30000 checkpoint
+#Please note: need to change include_feature argument default value to False in the arguments/__init__.py file.
+cd ..
+python train.py \
+  -s /wekafs/dougljia/LangSplat/lerf_ovs/figurines \
+  -m /wekafs/dougljia/LangSplat/lerf_ovs/figurines/output/figurines \
+  --iterations 30000
+
+# Train the LangSplat and render
+for level in 1 2 3; do
+  #Train the LangSplat.
+  #Please note: need to change include_feature default value to True for this step
+  python train.py \
+    -s $dataset_path \
+    -m output/figurines \
+    --start_checkpoint /wekafs/dougljia/LangSplat/lerf_ovs/figurines/output/figurines_-1/chkpnt30000.pth \
+    --feature_level $level
+  # Render the LangSplat
+  python render.py \
+    -s $dataset_path \
+    -m output/figurines_${level} \
+    --feature_level ${level} \
+    --include_feature
+done
+
+# Eval
+cd eval
+pip install matplotlib mediapy
+# change gt_folder to this location: ../lerf_ovs/label
+bash eval.sh
+```
+The original READ.me file is below:
+
+---
+
 # [CVPR2024 Highlight] LangSplat: 3D Language Gaussian Splatting 
 [Minghan Qin*](https://minghanqin.github.io/), [Wanhua Li*†](https://li-wanhua.github.io/), [Jiawei Zhou*](https://latitudezhou.github.io/), [Haoqian Wang†](https://www.sigs.tsinghua.edu.cn/whq_en/main.htm), [Hanspeter Pfister](https://seas.harvard.edu/person/hanspeter-pfister)<br>(\* indicates equal contribution, † means Co-corresponding author)<br>| [Webpage](https://langsplat.github.io/) | [Full Paper](https://arxiv.org/pdf/2312.16084.pdf) | [Video](https://www.youtube.com/watch?v=XMlyjsei-Es) |<br>
 | Preprocessed Dataset | [BaiduWangpan](https://pan.baidu.com/s/1S_cdmN9EFOlCQ3z1GZR3EA?pwd=lfea) | [GoogleDrive](https://drive.google.com/drive/folders/1Icw5AcQkY_2L_k7ddXrGCJ3z4laa4jg5?usp=sharing) |<br>
