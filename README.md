@@ -53,8 +53,8 @@ python test.py \
 #Please note: need to change include_feature argument default value to False in the arguments/__init__.py file.
 cd ..
 python train.py \
-  -s /wekafs/dougljia/LangSplat/lerf_ovs/figurines \
-  -m /wekafs/dougljia/LangSplat/lerf_ovs/figurines/output/figurines \
+  -s lerf_ovs/figurines \
+  -m lerf_ovs/figurines/output/figurines \
   --iterations 30000
 
 # Train the LangSplat and render
@@ -64,7 +64,7 @@ for level in 1 2 3; do
   python train.py \
     -s $dataset_path \
     -m output/figurines \
-    --start_checkpoint /wekafs/dougljia/LangSplat/lerf_ovs/figurines/output/figurines_-1/chkpnt30000.pth \
+    --start_checkpoint lerf_ovs/figurines/output/figurines_-1/chkpnt30000.pth \
     --feature_level $level
   # Render the LangSplat
   python render.py \
