@@ -50,17 +50,16 @@ python test.py \
   --decoder_dims 16 32 64 128 256 256 512
 
 # Train RGB 3DGS 30000 checkpoint
-#Please note: need to change include_feature argument default value to False in the arguments/__init__.py file.
 cd ..
 python train.py \
   -s lerf_ovs/figurines \
   -m lerf_ovs/figurines/output/figurines \
-  --iterations 30000
+  --iterations 30000 \
+  --no_include_feature
 
 # Train the LangSplat and render
 for level in 1 2 3; do
-  #Train the LangSplat.
-  #Please note: need to change include_feature default value to True for this step
+  # Train the LangSplat (include_feature defaults to True)
   python train.py \
     -s $dataset_path \
     -m output/figurines \

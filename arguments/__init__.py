@@ -28,12 +28,16 @@ class ParamGroup:
             value = value if not fill_none else None 
             if shorthand:
                 if t == bool:
-                    group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true")
+                    # Add both --flag and --no_flag options for booleans
+                    group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true", dest=key)
+                    group.add_argument("--no_" + key, default=None, action="store_false", dest=key)
                 else:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, type=t)
             else:
                 if t == bool:
-                    group.add_argument("--" + key, default=value, action="store_true")
+                    # Add both --flag and --no_flag options for booleans
+                    group.add_argument("--" + key, default=value, action="store_true", dest=key)
+                    group.add_argument("--no_" + key, default=None, action="store_false", dest=key)
                 else:
                     group.add_argument("--" + key, default=value, type=t)
 
@@ -81,7 +85,7 @@ class OptimizationParams(ParamGroup):
         self.feature_lr = 0.0025
         self.opacity_lr = 0.05
         self.language_feature_lr = 0.0025 # TODO: update
-        self.include_feature = False # Set to False if train the original gs
+        self.include_feature = True # Default True for LangSplat; use --no_include_feature for RGB training
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.percent_dense = 0.01
