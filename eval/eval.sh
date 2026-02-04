@@ -2,7 +2,7 @@
 CASE_NAME="figurines"
 
 # path to lerf_ovs/label
-gt_folder="/wekafs/dougljia/LangSplat/lerf_ovs/label"
+gt_folder="/home/douglas.jia@amd.com/LangSplat/lerf_ovs/label"
 
 root_path="../"
 
