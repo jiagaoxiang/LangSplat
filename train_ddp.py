@@ -144,6 +144,10 @@ def training_ddp(dataset, opt, pipe, testing_iterations, saving_iterations,
             print(f"Iterations per epoch: {iterations_per_epoch}")
             print(f"Total iterations: {total_iterations}")
     
+    # Ensure final iteration is always saved (epoch or iteration mode)
+    if opt.iterations not in saving_iterations:
+        saving_iterations.append(opt.iterations)
+    
     # Print training statistics
     if is_main_process():
         print(f"\n=== Training Statistics ===")
