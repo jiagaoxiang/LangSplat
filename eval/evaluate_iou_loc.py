@@ -305,6 +305,10 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="prompt any label")
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument('--feat_dir', type=str, default=None)
+    parser.add_argument("--model_path", "-m", type=str, default=None,
+                        help="Base model path (same as -m in train/render). "
+                             "The script appends _{1,2,3} for the three feature levels. "
+                             "If provided, --feat_dir and --dataset_name are not used for feature paths.")
     parser.add_argument("--ae_ckpt_dir", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--json_folder", type=str, default=None)
@@ -324,7 +328,14 @@ if __name__ == "__main__":
     # NOTE config setting
     dataset_name = args.dataset_name
     mask_thresh = args.mask_thresh
-    feat_dir = [os.path.join(args.feat_dir, dataset_name+f"_{i}", "train/ours_None/renders_npy") for i in range(1,4)]
+    if args.model_path:
+        # Use --model_path directly: append _{level} just like train/render do
+        feat_dir = [os.path.join(args.model_path + f"_{i}", "train/ours_None/renders_npy") for i in range(1, 4)]
+    elif args.feat_dir and dataset_name:
+        # Legacy fallback: construct from --feat_dir and --dataset_name
+        feat_dir = [os.path.join(args.feat_dir, dataset_name + f"_{i}", "train/ours_None/renders_npy") for i in range(1, 4)]
+    else:
+        parser.error("Either --model_path or both --feat_dir and --dataset_name are required")
     output_path = os.path.join(args.output_dir, dataset_name)
     ae_ckpt_path = os.path.join(args.ae_ckpt_dir, dataset_name, "best_ckpt.pth")
     json_folder = os.path.join(args.json_folder, dataset_name)

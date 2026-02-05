@@ -287,6 +287,10 @@ def main():
                         help="Use ground truth labels as queries")
     parser.add_argument("--feat_dir", type=str, default="output",
                         help="Directory containing rendered features")
+    parser.add_argument("--model_path", "-m", type=str, default=None,
+                        help="Base model path (same as -m in train/render). "
+                             "The script appends _{1,2,3} for the three feature levels. "
+                             "If provided, --feat_dir and --dataset_name are not used for feature paths.")
     parser.add_argument("--ae_ckpt_dir", type=str, default="autoencoder/ckpt",
                         help="Autoencoder checkpoint directory")
     parser.add_argument("--gt_folder", type=str, default="lerf_ovs/label",
@@ -337,10 +341,18 @@ def main():
     print(f"Using queries: {queries}")
     
     # Load feature paths for all 3 levels
-    feat_dirs = [
-        os.path.join(args.feat_dir, f"{args.dataset_name}_{i}", "train/ours_None/renders_npy")
-        for i in range(1, 4)
-    ]
+    if args.model_path:
+        # Use --model_path directly: append _{level} just like train/render do
+        feat_dirs = [
+            os.path.join(args.model_path + f"_{i}", "train/ours_None/renders_npy")
+            for i in range(1, 4)
+        ]
+    else:
+        # Legacy fallback: construct from --feat_dir and --dataset_name
+        feat_dirs = [
+            os.path.join(args.feat_dir, f"{args.dataset_name}_{i}", "train/ours_None/renders_npy")
+            for i in range(1, 4)
+        ]
     
     # Check if feature directories exist
     for i, fd in enumerate(feat_dirs):

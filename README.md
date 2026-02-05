@@ -114,14 +114,45 @@ for level in 1 2 3; do
 done
 ```
 
-#### Evaluation
+#### Evaluation, Visualization, and Annotation
+
+All downstream scripts (`evaluate_iou_loc.py`, `visualize_langsplat.py`, `annotate_objects.py`) accept
+a `--model_path` / `-m` flag that takes the **same base path** you passed to `-m` during training/rendering.
+The script automatically appends `_{1,2,3}` for the three feature levels, so you no longer need to
+manually construct feature directory paths.
 
 ```shell
+# Set MODEL_PATH to match the -m flag used during training.
+# Single-GPU example: MODEL_PATH=output/figurines
+# DDP example:        MODEL_PATH=output/figurines_ddp
+MODEL_PATH=output/figurines_ddp
+
+# Eval
 cd eval
 pip install matplotlib mediapy
-# change gt_folder to this location: ../lerf_ovs/label
-bash eval.sh
+python evaluate_iou_loc.py \
+    --dataset_name figurines \
+    --model_path ../${MODEL_PATH} \
+    --ae_ckpt_dir ../autoencoder/ckpt \
+    --output_dir ../eval_result \
+    --json_folder ../lerf_ovs/label
+cd ..
+
+# Visualization (heatmaps + localization per query)
+python visualize_langsplat.py \
+    --dataset_name figurines \
+    --model_path ${MODEL_PATH} \
+    --use_gt_labels
+
+# Annotation (bounding boxes + labels overlaid on images)
+python annotate_objects.py \
+    --dataset_name figurines \
+    --model_path ${MODEL_PATH} \
+    --use_gt_labels
 ```
+
+> **Backward compatibility:** The old `--feat_dir` + `--dataset_name` combination still works
+> if `--model_path` is not provided.
 
 The original README is below:
 
