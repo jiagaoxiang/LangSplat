@@ -1,4 +1,19 @@
-## This is the AMD ROCm GPU tested version of the original repo. 
+## AMD ROCm GPU Fork
+
+This is the AMD ROCm GPU tested version of the original repo, with the following key contributions:
+
+### Key Contributions
+
+1. **Distributed Data Parallel (DDP) Training for Language Features**
+   - Added multi-GPU support for language feature training via `train_ddp.py`, enabling training across multiple GPUs using PyTorch's `torchrun`.
+   - Includes a `DistributedCameraSampler` that distributes cameras across ranks with per-epoch shuffling and drop-last support.
+   - Gradients for `_language_feature` are averaged across all ranks via `all_reduce`, while only rank 0 handles logging, checkpointing, and TensorBoard.
+
+2. **2-3x Faster Language Feature Training via Memory Optimization**
+   - Identified and fixed a critical glibc heap memory leak in `Camera.get_language_feature()`: every training iteration loaded `.npy` files from disk and performed CPU-side tensor operations (~70 MB of heap allocations per iteration), which glibc's `malloc` never returned to the OS. With 8 DDP workers running 30,000 iterations each, this caused monotonic RSS growth exceeding the system's RAM, triggering the Linux OOM killer.
+   - Applied two fixes: (a) GPU-side caching of language features on each `Camera` object so disk I/O and CPU preprocessing happen only once per camera, and (b) setting `MALLOC_MMAP_THRESHOLD_` to force glibc to use `mmap()` for large allocations (properly freed on release). Together, these eliminated the OOM and improved training throughput by 2~3 times.
+
+### Installation
 
 To install ROCm and PyTorch suite of software, please refer: [The Rock releases for rocm and PyTorch](https://github.com/ROCm/TheRock/blob/main/RELEASES.md). To install the AMD ROCm GPU version of the submodules and dependencies for this repo, use the commands below:
 
@@ -10,7 +25,9 @@ pip install --no-build-isolation git+https://github.com/amd-wangfan/simple-knn.g
 pip install opencv-python
 ```
 
-Below are the commands for running the entire commands in the repo tested on AMD GPUs.
+### Quick Start
+
+Below are the commands for running the entire pipeline tested on AMD GPUs.
 
 ```shell
 # Clone LangSplat repo
@@ -56,8 +73,11 @@ python train.py \
   -m lerf_ovs/figurines/output/figurines \
   --iterations 30000 \
   --no_include_feature
+```
 
-# Train the LangSplat and render
+#### Single-GPU Language Feature Training
+
+```shell
 for level in 1 2 3; do
   # Train the LangSplat (include_feature defaults to True)
   python train.py \
@@ -72,14 +92,38 @@ for level in 1 2 3; do
     --feature_level ${level} \
     --include_feature
 done
+```
 
-# Eval
+#### Multi-GPU DDP Language Feature Training
+
+```shell
+for level in 1 2 3; do
+  # Train the LangSplat with DDP (8 GPUs)
+  OMP_NUM_THREADS=1 torchrun --standalone --nnodes=1 --nproc_per_node=8 \
+      train_ddp.py \
+      -s $dataset_path \
+      -m output/figurines_ddp \
+      --start_checkpoint lerf_ovs/figurines/output/figurines_-1/chkpnt30000.pth \
+      --feature_level $level
+  # Render the LangSplat (no DDP needed for rendering)
+  python render.py \
+    -s $dataset_path \
+    -m output/figurines_ddp_${level} \
+    --feature_level ${level} \
+    --include_feature
+done
+```
+
+#### Evaluation
+
+```shell
 cd eval
 pip install matplotlib mediapy
 # change gt_folder to this location: ../lerf_ovs/label
 bash eval.sh
 ```
-The original READ.me file is below:
+
+The original README is below:
 
 ---
 

@@ -12,7 +12,15 @@
 # NOTE: This script is ONLY for language feature training (--include_feature).
 #       For RGB/geometry training, use the original train.py
 
+# CRITICAL: Must be set BEFORE importing numpy/torch.
+# Forces glibc to use mmap() for allocations >= 64KB instead of growing the heap.
+# Without this, glibc's malloc never returns freed heap memory to the OS, causing
+# monotonic RSS growth (~70MB/iter from get_language_feature intermediates) that
+# triggers the OOM killer when running 8 DDP workers.
 import os
+os.environ.setdefault('MALLOC_MMAP_THRESHOLD_', '65536')
+
+import gc
 import torch
 import torch.distributed as dist
 from utils.loss_utils import l1_loss
@@ -298,6 +306,13 @@ def training_ddp(dataset, opt, pipe, testing_iterations, saving_iterations,
                     scene.model_path + "/chkpnt" + str(iteration) + ".pth"
                 )
             
+            # Periodic CPU/GPU cache cleanup to reduce fragmentation pressure
+            if iteration % 5000 == 0:
+                if is_main_process():
+                    print(f"\n[ITER {iteration}] Running gc.collect() and torch.cuda.empty_cache()")
+                gc.collect()
+                torch.cuda.empty_cache()
+
             # Barrier to keep all ranks in sync
             t0 = time.perf_counter()
             if world_size > 1:
@@ -308,26 +323,6 @@ def training_ddp(dataset, opt, pipe, testing_iterations, saving_iterations,
         debug_times['total'] += time.perf_counter() - t_start
         debug_count += 1
         
-        # Print debug timing every 100 iterations
-        if iteration % 100 == 0:
-            io_sum = torch.tensor(debug_times['io'], device=device)
-            io_max = torch.tensor(debug_times['io'], device=device)
-            if world_size > 1:
-                dist.all_reduce(io_sum, op=dist.ReduceOp.SUM)
-                dist.all_reduce(io_max, op=dist.ReduceOp.MAX)
-
-            if is_main_process():
-                print(f"\n=== DEBUG TIMING (avg over {debug_count} iters) ===")
-                for k, v in debug_times.items():
-                    avg_ms = (v / debug_count) * 1000
-                    print(f"  {k}: {avg_ms:.2f} ms")
-                io_avg_ms = (io_sum.item() / (world_size * debug_count)) * 1000
-                io_max_ms = (io_max.item() / debug_count) * 1000
-                print(f"  io (avg per-rank): {io_avg_ms:.2f} ms")
-                print(f"  io (max per-rank): {io_max_ms:.2f} ms")
-                print(f"  Effective it/s: {debug_count / debug_times['total']:.2f}")
-                print("=" * 45)
-
 
 def prepare_output_and_logger(args):
     """Prepare output directory and tensorboard logger (rank 0 only)."""

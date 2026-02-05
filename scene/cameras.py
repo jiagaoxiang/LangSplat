@@ -56,17 +56,21 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
     def get_language_feature(self, language_feature_dir, feature_level):
+        # Return cached result if available (avoids ~70MB/iter CPU heap allocations
+        # from np.load, meshgrid, indexing, etc. that cause OOM with 8 DDP workers).
+        cache_key = feature_level
+        if hasattr(self, '_lf_cache') and cache_key in self._lf_cache:
+            return self._lf_cache[cache_key]
+
         language_feature_name = os.path.join(language_feature_dir, self.image_name)
-        seg_map = torch.from_numpy(np.load(language_feature_name + '_s.npy'))
-        feature_map = torch.from_numpy(np.load(language_feature_name + '_f.npy'))
+        # Use mmap_mode='r' so the OS manages the file mapping (properly freed on close)
+        # instead of glibc's heap allocator (which never returns freed memory to OS).
+        seg_map_np = np.load(language_feature_name + '_s.npy', mmap_mode='r')
+        feature_map_np = np.load(language_feature_name + '_f.npy', mmap_mode='r')
+        seg_map = torch.from_numpy(np.array(seg_map_np))
+        feature_map = torch.from_numpy(np.array(feature_map_np))
+        del seg_map_np, feature_map_np
         
-        # elif str(language_feature_name).split('.')[-1] == 'pkl':
-        #     with open(language_feature_name, 'rb') as f:
-        #         data = pickle.load(f)
-        #     seg_map = data['seg_maps']
-        #     feature_tensor = data['feature']
-        # print(seg_map.shape, feature_tensor.shape)torch.Size([4, 832, 1264]) torch.Size([391, 512])
-        # feature_map = torch.zeros(512, self.image_height, self.image_width)
         y, x = torch.meshgrid(torch.arange(0, self.image_height), torch.arange(0, self.image_width))
         x = x.reshape(-1, 1)
         y = y.reshape(-1, 1)
@@ -86,10 +90,15 @@ class Camera(nn.Module):
             mask = mask[3:4].reshape(1, self.image_height, self.image_width)
         else:
             raise ValueError("feature_level=", feature_level)
-        # point_feature = torch.cat((point_feature2, point_feature3, point_feature4), dim=-1).to('cuda')
         point_feature = point_feature1.reshape(self.image_height, self.image_width, -1).permute(2, 0, 1)
        
-        return point_feature.cuda(), mask.cuda()
+        # Cache on GPU. With 299 cameras and 3-channel features at 832x1264,
+        # this uses ~5GB GPU memory per process -- trivial on MI325X (256GB).
+        result = (point_feature.cuda(), mask.cuda())
+        if not hasattr(self, '_lf_cache'):
+            self._lf_cache = {}
+        self._lf_cache[cache_key] = result
+        return result
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
