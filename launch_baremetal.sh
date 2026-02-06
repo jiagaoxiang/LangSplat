@@ -48,7 +48,7 @@ DEFAULT_HOST_PATH="$USER_HOME"
 # LangSplat-specific defaults
 HOME_DIR="${USER_HOME}/LangSplat"
 DEFAULT_DATASET_PATH="${HOME_DIR}/lerf_ovs/figurines"
-DEFAULT_MODEL_PATH="output/figurines"
+DEFAULT_MODEL_PATH="output/figurines_ddp"
 DEFAULT_CHECKPOINT="${HOME_DIR}/lerf_ovs/figurines/output/figurines_-1/chkpnt30000.pth"
 DEFAULT_FEATURE_LEVELS="1 2 3"
 DEFAULT_ITERATIONS=30000
@@ -321,7 +321,7 @@ if [ -n "$NODES" ]; then
         PIP_CMD="pip install torchvision==0.25.0+rocm7.1 --index-url https://download.pytorch.org/whl/rocm7.1 && \
 pip install open-clip-torch plyfile jaxtyping typing pathlib && \
 pip install submodules/segment-anything-langsplat --no-build-isolation && \
-pip install --no-build-isolation git+https://github.com/jiagaoxiang/langsplat-rasterization.git && \
+pip install --no-build-isolation git+https://github.com/ROCm/gsplat.git && \
 pip install --no-build-isolation git+https://github.com/amd-wangfan/simple-knn.git@hip_support && \
 pip install opencv-python"
     fi

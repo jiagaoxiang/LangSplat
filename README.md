@@ -20,10 +20,28 @@ To install ROCm and PyTorch suite of software, please refer: [The Rock releases 
 ```shell
 pip install open-clip-torch plyfile jaxtyping typing pathlib
 pip install submodules/segment-anything-langsplat --no-build-isolation
-pip install --no-build-isolation git+https://github.com/jiagaoxiang/langsplat-rasterization.git 
+
+# Install AMD-optimized gsplat (replaces the old langsplat-rasterization)
+pip install --no-build-isolation git+https://github.com/ROCm/gsplat.git
+
 pip install --no-build-isolation git+https://github.com/amd-wangfan/simple-knn.git@hip_support
 pip install opencv-python
 ```
+
+#### Installing rocm/gsplat from a local clone
+
+If you have already cloned the `gsplat` repo locally (e.g. to `~/gsplat`), you
+can install it in editable mode instead, which is useful for development:
+
+```shell
+cd ~/gsplat
+pip install --no-build-isolation -e .
+```
+
+> **Note:** Building gsplat from source requires a working ROCm toolchain.  The
+> build auto-detects your GPU architecture via `rocminfo` (e.g. `gfx942`,
+> `gfx90a`).  If the detection fails, it defaults to `gfx942`.  You can verify
+> the install with: `python -c "import gsplat; print(gsplat.__version__)"`
 
 ### Quick Start
 
