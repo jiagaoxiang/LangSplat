@@ -1,10 +1,10 @@
-## LangSplat on AMD GPUs: Performance Optimization Journey (15 -> 145 iter/s)
+## LangSplat on GPUs: Performance Optimization Journey (15 -> 145 iter/s)
 
 **Repo:** [jiagaoxiang/LangSplat](https://github.com/jiagaoxiang/LangSplat) | **Rasterization backend:** [ROCm/gsplat](https://github.com/ROCm/gsplat)
 
 ### Overview
 
-Over the course of one week, we achieved a **~10x throughput improvement** for LangSplat language feature training on AMD MI325X GPUs through three categories of optimization. Each addressed a different bottleneck in the pipeline.
+Over the course of one week, we achieved a **~10x throughput improvement** for LangSplat language feature training on powerful GPUs through three categories of optimization. Each addressed a different bottleneck in the pipeline.
 
 | Stage | Throughput | Bottleneck Removed |
 |-------|------------|-------------------|
@@ -25,7 +25,7 @@ Running `python train.py` on a single GPU gave ~15 iter/s. Switching to multi-GP
 The clue: `torchrun` auto-sets `OMP_NUM_THREADS=1` when `nproc_per_node > 1` (see [`torch/distributed/run.py` line 850](https://github.com/pytorch/pytorch/blob/main/torch/distributed/run.py#L850)). Importantly, **single-GPU torchrun (`--nproc_per_node=1`) does NOT set this** -- the guard is `nproc_per_node > 1`. Plain `python` doesn't set it either.
 
 **Root cause:**
-Without `OMP_NUM_THREADS=1`, PyTorch's internal thread pool (controlled by `torch.get_num_threads()`) defaults to the number of CPU cores. On the MI325X node with a 128-core AMD EPYC, this means PyTorch dispatches every CPU operation (tensor indexing, `meshgrid`, L1 loss reduction, etc.) across up to 128 threads via `at::parallel_for`.
+Without `OMP_NUM_THREADS=1`, PyTorch's internal thread pool (controlled by `torch.get_num_threads()`) defaults to the number of CPU cores. On the GPU node with a 128-core CPU, this means PyTorch dispatches every CPU operation (tensor indexing, `meshgrid`, L1 loss reduction, etc.) across up to 128 threads via `at::parallel_for`.
 
 The thread pool itself is created once and reused -- threads aren't spawned per operation. However, each dispatch involves **partitioning the work, waking threads, and hitting a synchronization barrier** at the end. LangSplat's training loop has many short-lived CPU operations (mask indexing, loss computation) on small tensors interleaved with GPU kernel launches. For these microsecond-scale operations, the per-dispatch overhead of coordinating 128 threads far exceeds the actual computation, and the frequent synchronization barriers serialize the pipeline.
 
@@ -43,7 +43,7 @@ OMP_NUM_THREADS=1 torchrun \
     ...
 ```
 
-**Takeaway:** Always set `OMP_NUM_THREADS=1` for GPU-bound training with short CPU ops, especially on high-core-count AMD EPYC nodes. Don't rely on `torchrun` to do it -- it only kicks in when `nproc_per_node > 1`.
+**Takeaway:** Always set `OMP_NUM_THREADS=1` for GPU-bound training with short CPU ops, especially on high-core-count nodes. Don't rely on `torchrun` to do it -- it only kicks in when `nproc_per_node > 1`.
 
 ---
 
@@ -64,7 +64,7 @@ This caused two problems:
 
 **The fix (two-part):**
 
-**Part A -- GPU-side caching:** Cache `(point_feature.cuda(), mask.cuda())` on first access. Subsequent calls return the cached GPU tensors with zero I/O or CPU work. Memory cost: ~5GB per process for 299 cameras at 832x1264x3 -- trivial on MI325X with 256GB HBM.
+**Part A -- GPU-side caching:** Cache `(point_feature.cuda(), mask.cuda())` on first access. Subsequent calls return the cached GPU tensors with zero I/O or CPU work. Memory cost: ~5GB per process for 299 cameras at 832x1264x3 -- trivial on GPUs with a few hundred GB HBM.
 
 ```python
 # scene/cameras.py (commit 7864a69)
@@ -104,9 +104,9 @@ The 25 -> 45 iter/s jump shows that disk I/O + CPU preprocessing consumed roughl
 - LangSplat repo: [`b365699`](https://github.com/jiagaoxiang/LangSplat/commit/b365699) (renderer rewrite)
 
 **What happened:**
-Replaced the `langsplat-rasterization` backend (forked from Inria's original 3DGS CUDA rasterizer, hipified for ROCm) with [ROCm/gsplat](https://github.com/ROCm/gsplat), which has purpose-built AMD kernel optimizations. The [`gaussian_renderer/__init__.py`](https://github.com/jiagaoxiang/LangSplat/blob/main/gaussian_renderer/__init__.py) was fully rewritten to call `gsplat.rasterization()` directly.
+Replaced the `langsplat-rasterization` backend (forked from Inria's original 3DGS CUDA rasterizer, hipified for ROCm) with [ROCm/gsplat](https://github.com/ROCm/gsplat), which has purpose-built kernel optimizations. The [`gaussian_renderer/__init__.py`](https://github.com/jiagaoxiang/LangSplat/blob/main/gaussian_renderer/__init__.py) was fully rewritten to call `gsplat.rasterization()` directly.
 
-**Why 3.2x -- the AMD optimizations in gsplat:**
+**Why 3.2x -- the GPU specific optimizations in gsplat:**
 
 | Optimization | langsplat-rasterization | gsplat (ROCm) | Impact |
 |---|---|---|---|
@@ -117,7 +117,7 @@ Replaced the `langsplat-rasterization` backend (forked from Inria's original 3DG
 | **Stream management** | CUDA-style via hipify shim | Native `c10::hip::HIPStream` | Eliminates the masquerading-as-CUDA overhead layer |
 
 **The language features integration:**
-Rather than threading a `language_feature` parameter through every kernel (as langsplat-rasterization does), we leveraged gsplat's existing N-D channel support (`CDIM` template). Language features (3ch) are concatenated with RGB (3ch) = 6 channels, padded to CDIM=8. No kernel changes needed -- all AMD optimizations apply automatically.
+Rather than threading a `language_feature` parameter through every kernel (as langsplat-rasterization does), we leveraged gsplat's existing N-D channel support (`CDIM` template). Language features (3ch) are concatenated with RGB (3ch) = 6 channels, padded to CDIM=8. No kernel changes needed -- all GPU specific optimizations apply automatically.
 
 ```python
 # gsplat/rendering.py (commit 413afe1)
@@ -138,6 +138,6 @@ After I/O caching (step 2), iteration time was dominated by GPU rasterization: f
 | | OMP_NUM_THREADS=1 | GPU Caching | gsplat Integration |
 |---|---|---|---|
 | **Bottleneck** | CPU thread overhead | Disk I/O + CPU preprocessing | Unoptimized rasterization kernels |
-| **Fix** | Single OMP thread | Cache on GPU HBM | AMD DPP + fused kernels + 8x8 tiles |
+| **Fix** | Single OMP thread | Cache on GPU HBM | DPP + fused kernels + 8x8 tiles |
 | **Speedup** | 1.7x | 1.8x | 3.2x |
 | **Cumulative** | 1.7x | 3.0x | 9.7x |
