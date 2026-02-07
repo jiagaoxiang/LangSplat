@@ -131,11 +131,11 @@ After I/O caching (step 2), iteration time was dominated by GPU rasterization: f
 
 ### Summary
 
-```
-15 iter/s  ──[OMP_NUM_THREADS=1]──>  25 iter/s  ──[GPU caching]──>  45 iter/s  ──[gsplat]──>  145 iter/s
+**15 iter/s -> 25 -> 45 -> 145 iter/s (9.7x cumulative)**
 
-Bottleneck:   CPU thread overhead     Disk I/O + CPU preprocessing    Unoptimized rasterization kernels
-Fix:          Single OMP thread       Cache on GPU HBM                AMD DPP + fused kernels + 8x8 tiles
-Speedup:      1.7x                    1.8x                           3.2x
-Cumulative:   1.7x                    3.0x                           9.7x
-```
+| | OMP_NUM_THREADS=1 | GPU Caching | gsplat Integration |
+|---|---|---|---|
+| **Bottleneck** | CPU thread overhead | Disk I/O + CPU preprocessing | Unoptimized rasterization kernels |
+| **Fix** | Single OMP thread | Cache on GPU HBM | AMD DPP + fused kernels + 8x8 tiles |
+| **Speedup** | 1.7x | 1.8x | 3.2x |
+| **Cumulative** | 1.7x | 3.0x | 9.7x |
