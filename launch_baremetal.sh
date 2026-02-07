@@ -45,6 +45,10 @@ USER_HOME="/home/douglas.jia@amd.com"
 DEFAULT_NODES_FILE="${USER_HOME}/MI325_cluster/nodes.txt"
 DEFAULT_HOST_PATH="$USER_HOME"
 
+# gsplat repo location (AMD-optimized rasterization backend)
+GSPLAT_DIR="${USER_HOME}/gsplat"
+GSPLAT_REPO="https://github.com/ROCm/gsplat.git"
+
 # LangSplat-specific defaults
 HOME_DIR="${USER_HOME}/LangSplat"
 DEFAULT_DATASET_PATH="${HOME_DIR}/lerf_ovs/figurines"
@@ -321,7 +325,9 @@ if [ -n "$NODES" ]; then
         PIP_CMD="pip install torchvision==0.25.0+rocm7.1 --index-url https://download.pytorch.org/whl/rocm7.1 && \
 pip install open-clip-torch plyfile jaxtyping typing pathlib && \
 pip install submodules/segment-anything-langsplat --no-build-isolation && \
-pip install --no-build-isolation git+https://github.com/ROCm/gsplat.git && \
+mkdir -p /root/.local/include && \
+cp -r ${GSPLAT_DIR}/gsplat/cuda/csrc/third_party/glm/glm /root/.local/include/ && \
+cd ${GSPLAT_DIR} && pip install --no-build-isolation --no-cache-dir -e . && cd ${HOME_DIR} && \
 pip install --no-build-isolation git+https://github.com/amd-wangfan/simple-knn.git@hip_support && \
 pip install opencv-python"
     fi
@@ -418,6 +424,17 @@ pip install opencv-python"
     else
         echo ""
         echo "Skipping cleanup (--skip-cleanup specified)"
+    fi
+
+    # ============================================================
+    # Ensure gsplat repo is available (clone on master, NFS-shared)
+    # ============================================================
+    if [ ! -d "${GSPLAT_DIR}/.git" ]; then
+        echo "gsplat repo not found at ${GSPLAT_DIR}, cloning..."
+        git clone --recursive "${GSPLAT_REPO}" "${GSPLAT_DIR}"
+    else
+        # Ensure submodules are initialized (idempotent, safe on NFS)
+        (cd "${GSPLAT_DIR}" && git submodule update --init --recursive 2>/dev/null || true)
     fi
 
     # ============================================================
