@@ -11,7 +11,7 @@ This is the AMD ROCm GPU tested version of the original repo, with the following
 | GPU-side caching of language features | ~45 iter/s | 1.8x |
 | AMD-optimized gsplat rasterization | ~145 iter/s | 3.2x |
 
-1. **`OMP_NUM_THREADS=1` (1.7x)** -- Without this, PyTorch dispatches every small CPU op (mask indexing, L1 loss) across all CPU cores. On a 128-core EPYC, the thread coordination overhead dominates. Single-threaded execution is faster for these microsecond-scale operations.
+1. **`OMP_NUM_THREADS=1` (1.7x)** -- Without this, PyTorch dispatches every small CPU op (mask indexing, L1 loss) across all CPU cores. On a GPU node with 100+ CPU core, the thread coordination overhead dominates. Single-threaded execution is faster for these microsecond-scale operations.
 
 2. **GPU-side caching of language features (1.8x)** -- The original code loaded two `.npy` files from disk and ran CPU preprocessing every iteration. Caching the result on GPU HBM after first access eliminates ~45% of per-iteration cost. Also fixed a glibc heap memory leak (via `MALLOC_MMAP_THRESHOLD_`) that caused OOM with 8 DDP workers.
 
