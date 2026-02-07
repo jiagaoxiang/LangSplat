@@ -1,5 +1,7 @@
 ## LangSplat on AMD GPUs: Performance Optimization Journey (15 -> 145 iter/s)
 
+**Repo:** [jiagaoxiang/LangSplat](https://github.com/jiagaoxiang/LangSplat) | **Rasterization backend:** [ROCm/gsplat](https://github.com/ROCm/gsplat)
+
 ### Overview
 
 Over the course of one week, we achieved a **~10x throughput improvement** for LangSplat language feature training on AMD MI325X GPUs through three categories of optimization. Each addressed a different bottleneck in the pipeline.
@@ -15,7 +17,7 @@ Over the course of one week, we achieved a **~10x throughput improvement** for L
 
 ### 1. OMP_NUM_THREADS and CPU Thread Contention (15 -> 25 iter/s, ~1.7x)
 
-**Commit:** `7864a69` (LangSplat)
+**Commit:** [`7864a69`](https://github.com/jiagaoxiang/LangSplat/commit/7864a69) (LangSplat)
 
 **What happened:**
 Running `python train.py` on a single GPU gave ~15 iter/s. Switching to multi-GPU DDP via `torchrun --nproc_per_node=8` bumped throughput to ~25 iter/s *per GPU*. This was surprising because DDP adds communication overhead (`all_reduce`), so per-GPU throughput should drop, not rise.
@@ -47,8 +49,8 @@ OMP_NUM_THREADS=1 torchrun \
 
 ### 2. GPU-Side Caching of Language Features (25 -> 45 iter/s, ~1.8x)
 
-**Commit:** `7864a69` (LangSplat)
-**File:** `scene/cameras.py`
+**Commit:** [`7864a69`](https://github.com/jiagaoxiang/LangSplat/commit/7864a69) (LangSplat)
+**File:** [`scene/cameras.py`](https://github.com/jiagaoxiang/LangSplat/blob/main/scene/cameras.py)
 
 **What happened:**
 Every training iteration, `Camera.get_language_feature()` was:
@@ -98,11 +100,11 @@ The 25 -> 45 iter/s jump shows that disk I/O + CPU preprocessing consumed roughl
 ### 3. gsplat Integration (45 -> 145 iter/s, ~3.2x)
 
 **Commits:**
-- gsplat repo: `413afe1` (language features support), `bc2e041` + `09a451d` (setup.py fixes)
-- LangSplat repo: `b365699` (renderer rewrite)
+- gsplat repo: [`413afe1`](https://github.com/ROCm/gsplat/commit/413afe1) (language features support), [`bc2e041`](https://github.com/ROCm/gsplat/commit/bc2e041) + [`09a451d`](https://github.com/ROCm/gsplat/commit/09a451d) (setup.py fixes)
+- LangSplat repo: [`b365699`](https://github.com/jiagaoxiang/LangSplat/commit/b365699) (renderer rewrite)
 
 **What happened:**
-Replaced the `langsplat-rasterization` backend (forked from Inria's original 3DGS CUDA rasterizer, hipified for ROCm) with `ROCm/gsplat`, which has purpose-built AMD kernel optimizations. The `gaussian_renderer/__init__.py` was fully rewritten to call `gsplat.rasterization()` directly.
+Replaced the `langsplat-rasterization` backend (forked from Inria's original 3DGS CUDA rasterizer, hipified for ROCm) with [ROCm/gsplat](https://github.com/ROCm/gsplat), which has purpose-built AMD kernel optimizations. The [`gaussian_renderer/__init__.py`](https://github.com/jiagaoxiang/LangSplat/blob/main/gaussian_renderer/__init__.py) was fully rewritten to call `gsplat.rasterization()` directly.
 
 **Why 3.2x -- the AMD optimizations in gsplat:**
 
