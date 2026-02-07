@@ -2,7 +2,7 @@
 
 This is the AMD ROCm GPU tested version of the original repo, with the following key contributions:
 
-### Performance: ~10x Training Throughput (15 -> 145 iter/s on MI325X)
+### Performance: ~10x Training Throughput (15 -> 145 iter/s on AMD GPUs)
 
 | Optimization | Throughput | Speedup |
 |---|---|---|
