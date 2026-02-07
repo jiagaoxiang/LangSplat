@@ -2,6 +2,23 @@
 
 This is the AMD ROCm GPU tested version of the original repo, with the following key contributions:
 
+### Performance: ~10x Training Throughput (15 -> 145 iter/s on MI325X)
+
+| Optimization | Throughput | Speedup |
+|---|---|---|
+| Baseline (`python train.py`, single GPU) | ~15 iter/s | -- |
+| `OMP_NUM_THREADS=1` | ~25 iter/s | 1.7x |
+| GPU-side caching of language features | ~45 iter/s | 1.8x |
+| AMD-optimized gsplat rasterization | ~145 iter/s | 3.2x |
+
+1. **`OMP_NUM_THREADS=1` (1.7x)** -- Without this, PyTorch dispatches every small CPU op (mask indexing, L1 loss) across all CPU cores. On a 128-core EPYC, the thread coordination overhead dominates. Single-threaded execution is faster for these microsecond-scale operations.
+
+2. **GPU-side caching of language features (1.8x)** -- The original code loaded two `.npy` files from disk and ran CPU preprocessing every iteration. Caching the result on GPU HBM after first access eliminates ~45% of per-iteration cost. Also fixed a glibc heap memory leak (via `MALLOC_MMAP_THRESHOLD_`) that caused OOM with 8 DDP workers.
+
+3. **AMD-optimized gsplat rasterization (3.2x)** -- Replaced the hipified `langsplat-rasterization` with `ROCm/gsplat`, which has DPP warp reductions in the backward pass, 8x8 tiles (1 wavefront per tile on CDNA), `__launch_bounds__(64)`, and fused projection kernels. Language features are handled via gsplat's N-D channel support (no kernel changes needed).
+
+See [Performance_Optimization_Journey.md](Performance_Optimization_Journey.md) for the full analysis with code snippets and commit references.
+
 ### Key Contributions
 
 1. **Distributed Data Parallel (DDP) Training for Language Features**
@@ -9,9 +26,12 @@ This is the AMD ROCm GPU tested version of the original repo, with the following
    - Includes a `DistributedCameraSampler` that distributes cameras across ranks with per-epoch shuffling and drop-last support.
    - Gradients for `_language_feature` are averaged across all ranks via `all_reduce`, while only rank 0 handles logging, checkpointing, and TensorBoard.
 
-2. **2-3x Faster Language Feature Training via Memory Optimization**
+2. **GPU-side Caching and Memory Leak Fix**
    - Identified and fixed a critical glibc heap memory leak in `Camera.get_language_feature()`: every training iteration loaded `.npy` files from disk and performed CPU-side tensor operations (~70 MB of heap allocations per iteration), which glibc's `malloc` never returned to the OS. With 8 DDP workers running 30,000 iterations each, this caused monotonic RSS growth exceeding the system's RAM, triggering the Linux OOM killer.
-   - Applied two fixes: (a) GPU-side caching of language features on each `Camera` object so disk I/O and CPU preprocessing happen only once per camera, and (b) setting `MALLOC_MMAP_THRESHOLD_` to force glibc to use `mmap()` for large allocations (properly freed on release). Together, these eliminated the OOM and improved training throughput by 2~3 times.
+   - Applied two fixes: (a) GPU-side caching of language features on each `Camera` object so disk I/O and CPU preprocessing happen only once per camera, and (b) setting `MALLOC_MMAP_THRESHOLD_` to force glibc to use `mmap()` for large allocations (properly freed on release). Together, these eliminated the OOM and improved training throughput by ~1.8x.
+
+3. **AMD-optimized gsplat Integration**
+   - Replaced `langsplat-rasterization` with `ROCm/gsplat` as the rasterization backend, gaining AMD-specific kernel optimizations (DPP warp reductions, 8x8 tiles, fused projection). Added optional `language_features` parameter to `gsplat.rasterization()` upstream. Training throughput improved ~3.2x.
 
 ### Installation
 
@@ -22,26 +42,26 @@ pip install open-clip-torch plyfile jaxtyping typing pathlib
 pip install submodules/segment-anything-langsplat --no-build-isolation
 
 # Install AMD-optimized gsplat (replaces the old langsplat-rasterization)
-pip install --no-build-isolation git+https://github.com/ROCm/gsplat.git
+# Step 1: Clone with --recursive to get the bundled GLM submodule
+git clone --recursive https://github.com/ROCm/gsplat.git ~/gsplat
+
+# Step 2: Copy bundled GLM headers (has native HIP support, unlike system GLM)
+mkdir -p ~/.local/include
+cp -r ~/gsplat/gsplat/cuda/csrc/third_party/glm/glm ~/.local/include/
+
+# Step 3: Build and install in editable mode
+cd ~/gsplat && pip install --no-build-isolation --no-cache-dir -e .
 
 pip install --no-build-isolation git+https://github.com/amd-wangfan/simple-knn.git@hip_support
 pip install opencv-python
 ```
 
-#### Installing rocm/gsplat from a local clone
-
-If you have already cloned the `gsplat` repo locally (e.g. to `~/gsplat`), you
-can install it in editable mode instead, which is useful for development:
-
-```shell
-cd ~/gsplat
-pip install --no-build-isolation -e .
-```
-
-> **Note:** Building gsplat from source requires a working ROCm toolchain.  The
+> **Note:** Building gsplat from source requires a working ROCm toolchain. The
 > build auto-detects your GPU architecture via `rocminfo` (e.g. `gfx942`,
-> `gfx90a`).  If the detection fails, it defaults to `gfx942`.  You can verify
-> the install with: `python -c "import gsplat; print(gsplat.__version__)"`
+> `gfx90a`). If the detection fails, it defaults to `gfx942`. The `--recursive`
+> clone is required to get the bundled GLM math library which has native HIP
+> `__device__` annotations (the system `libglm-dev` package does not). You can
+> verify the install with: `python -c "import gsplat; print(gsplat.__version__)"`
 
 ### Quick Start
 
